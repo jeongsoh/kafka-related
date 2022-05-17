@@ -1,0 +1,62 @@
+----- ksql-datagen
+https://blog.voidmainvoid.net/269
+
+https://docs.confluent.io/platform/current/tutorials/examples/clients/docs/ksql-datagen.html
+사용자 맞춤형 데이터를 생성하여 특정 카프카 토픽에 produce하는 생성기로 json, avro 등의 스키마 생성을 지원
+기본 파라미터
+topic=<kafka topic name> : 대상 kafka topic 이름
+quickstart=<quickstart preset> : 전달할 데이터의 종류(orders, users, pageviews 3개 지원)
+
+옵션파라미터
+bootstrap-server=<kafka-server>:<port> : topic에 전달할 broker ip list
+format=<record format> : kafka topic에 넣을 파일 포맷 (json, avro, delimited 3개 지원)
+key=<name of key column> : key를 사용할 경우 key column이름
+schema=<avro schema file> : avro 스키마를 사용할 경우 avro shcema file 경로
+iterations=<number of records> : topic에 전달할 data 개수
+maxInterval=<max time between records> : 새로운 data를 전달할 때 간격 단위
+propertiesFile=<path-to-properties-file> : ksql-datagen properties 파일
+schemaRegistryUrl=<schema registry http url> : avro 포맷을 사용할 경우  
+
+예제, ksql-datagen으로 데이터 생성 후 kafka-console-consumer로 확인
+1-1. bin/ksql-datagen format=json, topic=users quickstart=users \
+   bootstrap-server=localhost:9092 iterations=10
+1-2. bin/kafka-console-consumer —bootstrap-server localhost:9092 —topic users
+2-1. bin/ksql-datagen format=delimited topic=pageviews quickstart=pageviews \
+   bootstrap-server=localhost:9092 iterations=5
+2-2. bin/kafka-console-consumer —bootstrap-server localhost:9092 —topic pageviews
+
+----- voluble datagen
+
+https://github.com/MichaelDrogalis/voluble
+Java Faker 통합을 통해 현실적인 데이터 생성
+cross-topic relationships
+레코드의 key 및 value 모두 생성
+primitive 및 complex/nested 값 생성
+bounded 또는 unbounded streams of data
+tombstoning
+
+예, owners, cats, diets, adopters 토픽 생성
+CREATE SOURCE CONNECTOR s WITH (
+  'connector.class' = 'io.mdrogalis.voluble.VolubleSourceConnector',
+
+  'genkp.owners.with' = '#{Internet.uuid}',
+  'genv.owners.name->full.with' = '#{Name.full_name}',
+  'genv.owners.creditCardNumber.with' = '#{Finance.credit_card}',
+
+  'genk.cats.name.with' = '#{FunnyName.name}',
+  'genv.cats.owner.matching' = 'owners.key',
+
+  'genk.diets.catName.matching' = 'cats.key.name',
+  'genv.diets.dish.with' = '#{Food.vegetables}',
+  'genv.diets.measurement.with' = '#{Food.measurements}',
+  'genv.diets.size.with' = '#{Food.measurement_sizes}',
+
+  'genk.adopters.name.sometimes.with' = '#{Name.full_name}',
+  'genk.adopters.name.sometimes.matching' = 'adopters.key.name',
+  'genv.adopters.jobTitle.with' = '#{Job.title}',
+  'attrk.adopters.name.matching.rate' = '0.05',
+  'topic.adopters.tombstone.rate' = '0.10',
+
+  'global.throttle.ms' = '500', # 매 500 ms 마다 토픽 당 새로운 레코드 생성
+  'global.history.records.max' = '100000' # 토픽 당 메모리에 100000 레코드 유지
+);
