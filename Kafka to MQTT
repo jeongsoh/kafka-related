@@ -1,1 +1,173 @@
+Mosquitto 설치 및 설정
+EPEL (Extra Package for Enterprise Linux) 이용
+- sudo yum install epel-release
+
+Mosquitto 및 Mosquitto-clients 설치
+- sudo yum install mosquitto
+
+Mosquitto 서버 실행
+- sudo systemctl start mosquitto
+
+카프카 MQTT 커넥트 설정 및 실행
+- connect-distributed-mqtt.propertities
+- bin/connect-distributed {path}/connect-distributed-mqtt.propertities
+---------------------------------------------------------------------------------------------------------------
+bootstrap.servers=master:9092,node1:9092,node2:9092
+group.id=connect-cluster-mqtt
+
+key.converter=org.apache.kafka.connect.storage.StringConverter
+#value.converter=org.apache.kafka.connect.converters.ByteArrayConverter  -- confluent
+value.converter=org.apache.kafka.connect.storage.StringConverter
+
+key.converter.schemas.enable=false
+value.converter.schemas.enable=false
+
+offset.storage.topic=connect-offsets
+offset.storage.replication.factor=3
+#offset.storage.partitions=25
+
+config.storage.topic=connect-configs
+config.storage.replication.factor=3
+
+status.storage.topic=connect-status
+status.storage.replication.factor=3
+#status.storage.partitions=5
+
+# Flush much faster than normal, which is useful for testing/debugging
+offset.flush.interval.ms=10000
+
+# These are provided to inform the user about the presence of the REST host and port configs 
+# Hostname & Port for the REST API to listen on. If this is set, it will bind to the interface used to listen to requests.
+#rest.host.name=master
+#rest.port=8083
+
+# The Hostname & Port that will be given out to other workers to connect to i.e. URLs that are routable from other servers.
+rest.advertised.host.name=master
+rest.advertised.port=8083
+
+# plugin.path=/usr/local/share/java,/usr/local/share/kafka/plugins,/opt/connectors,
+plugin.path=/usr/share/kafka/plugins
+---------------------------------------------------------------------------------------------------------------
+
+Kafka MQTT 커넥터 설치
+- Confluent : confluentinc-kafka-connect-mqtt-1.5.1
+
+mqtt-confluent.json
+---------------------------------------------------------------------------------------------------------------
+{
+  "name": "mqttSource-confluent",
+  "config": {
+    "connector.class": "io.confluent.connect.mqtt.MqttSourceConnector",
+    "tasks.max": "1",
+    "mqtt.server.uri": "tcp://localhost:1883",
+    "mqtt.topics": "mqtt",
+    "kafka.topic": "mqtt-source",
+    "confluent.topic.bootstrap.servers" : "master:9092,node1:9092,node2:9092"
+  }
+}
+---------------------------------------------------------------------------------------------------------------
+
+- Open Source : kafka-connect-mqtt
+https://github.com/johanvandevenne/kafka-connect-mqtt
+
+mqtt-oss.json
+---------------------------------------------------------------------------------------------------------------
+{
+  "name": "mqttSource-oss",
+  "config": {
+    "connector.class": "be.jovacon.kafka.connect.MQTTSourceConnector",
+    "mqtt.broker": "tcp://localhost:1883",
+    "mqtt.topic": "mqtt",
+    "mqtt.clientID": "test",
+    "kafka.topic": "mqtt-source-oss",
+    "key.converter":"org.apache.kafka.connect.storage.StringConverter",
+    "key.converter.schemas.enable":false,
+    "value.converter":"org.apache.kafka.connect.storage.StringConverter",
+    "value.converter.schemas.enable":false
+
+  }
+}
+---------------------------------------------------------------------------------------------------------------
+
+센서 데이터 수신 동작 확인
+- Mosquitto 클라이언트 (mosquitto_pub)를 이용하여 Kafka Connect에서 구독하고 있는 mqtt (mqtt.topics)로 데이터 발행
+mosquitto_pub -d -t mqtt -m "hello! MQTT"
+
+- 카프카 컨솔 컨슈머를 통해 확인
+bin/kafka-console-consumer \
+	--bootstrap-server=master:9092,node1:9092,node2:9092 
+	--topic mqtt-source-oss \ # Confluent의 경우 mqtt-source
+	--from-beginning
+- kafka-delete-records를 이용 메시지 삭제
+bin/kafka-delete-records \
+	--bootstrap-server=master:9092,node1:9092,node2:9092 \
+	--offset-json-file delete-record.json
+delete-record.json 파일 
+---------------------------------------------------------------------------------------------------------------
+{
+  "partitions": [
+    {
+      "topic": "mqtt-source-oss",
+      "partition": 0,
+      "offset": -1
+    }, {
+      "topic": "mqtt-source-oss",
+      "partition": 1,
+      "offset": -1
+    }, {
+      "topic": "mqtt-source-oss",
+      "partition": 2,
+      "offset": -1
+    }
+  ],
+  "version": 
+}
+---------------------------------------------------------------------------------------------------------------
+
+센서 마스터 데이터 등록
+<디바이스 ID>, <디바이스 Name>, <설치 장소>, <설치 일자>, <설명>
+bin/kafka-console-producer \
+	--broker-list master:9092,node1:9092,node2:9092 \
+	--topic device-master --property "parse.key=true" --property "key.separator==:"
+d001:XA-01,회의실A,20210807,-
+d002:XA-02,회의실A,20210807,-
+d003:XB-05,북쪽공용공간,20210910,-
+
+센서 마스터 데이터 등록 확인
+bin/kafka-console-consumer \
+	--bootstrap-server master:9092,node1:9092,node2:9092 \
+	--topic device-master --from-beginning --property "print.key=true" \
+	--property "key.separator=<separator>"
+
+센서 마스터 데이터 기반 device-master table 생성 (device-master 토픽 기반)
+
+센서 데이터
+<디바이스 ID>, <타임스탬프>, <센서정보 1>, <센서정보 2>
+mosquitto_pub -d -t mqtt -m "d001, "date +%s", 30.5,1200"
+mosquitto_pub -d -t mqtt -m "d002, "date +%s", 50.0,1500"
+mosquitto_pub -d -t mqtt -m "d003, "date +%s", 150.0,2500"
+
+센서 데이터 기반 sensor-data stream 생성 (mqtt-source-oss 토픽 기반)
+
+센서 데이터_enriched
+<디바이스 ID>, <타임스탬프>, <센서정보 1>, <센서정보 2>, <디바이스 Name>, <설치 장소>, <설치 일자>, <설명>
+
+device-master table과 sensor-data stream 기반 sensor-data-enriched 스트림 생성
+
+create table device_master (device_id varchar key, device_name varchar, install_location varchar, install_date varchar) with (kafka_topic='device_master", value_format='avro');
+
+create stream sensor_data (device_id key, created_ts timestamp, measure1 float, measure2 float) with ( kafka_topic='sensor_data', value_fomat='avro')
+
+create stream sensor_data_enriched as \
+	select sd.device_id as device_id, \
+	        sd.created_ts as timestamp, \
+	        sd.measure1 as measure1, \
+   	        sd.measure2 as measure2, \
+ 	        dm.device_name as device_name, \
+	        dm.install_location as install_location, \
+	        dm.install_date as install date \
+	from sensor_data sd \
+	join device_master dm \
+	on sd.device_id = dm.device_id \
+emit changes;
 
